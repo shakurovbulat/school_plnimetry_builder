@@ -15,35 +15,29 @@ IS_NUM = custom(lambda token: token.isdigit())
 
 # --- КЛЮЧЕВЫЕ СЛОВА ---
 SHAPE_KEYWORDS = morph_pipeline([
-    'параллелограмм', 'треугольник', 'ромб', 'трапеция', 'прямоугольник', 'квадрат', 'окружность', 'четырехугольник'
+    'параллелограмм', 'треугольник', 'ромб', 'трапеция', 'прямоугольник', 'квадрат', 'четырехугольник'
 ])
 SHAPE_MODIFIERS = morph_pipeline([
-    'прямоугольный', 'равнобокий', 'равнобедренный', 'равносторонний', 'выпуклый', 'остроугольный'
+    'прямоугольный', 'равнобедренный', 'равносторонний', 'равнобокий'
 ])
 SEGMENT_KEYWORDS = morph_pipeline([
-    'отрезок', 'сторона', 'прямая', 'диагональ', 'биссектриса', 'перпендикуляр', 'диаметр', 'радиус', 'медиана',
-    'высота'
+    'отрезок', 'сторона', 'прямая', 'диагональ', 'биссектриса', 'перпендикуляр', 'медиана', 'высота', 'гипотенуза',
+    'катет'
 ])
 EQUAL_KEYWORDS = morph_pipeline(['равен', 'равна', 'равно', 'составляет', 'равны', '=', '=='])
-
-ANGLE_SIGN = rule(custom(lambda token: token == '∠'))
-ANGLE_WORD = morph_pipeline(['угол'])
-ANGLE_KEYWORDS = or_(ANGLE_WORD, ANGLE_SIGN)
+INTERSECT_KEYWORDS = morph_pipeline(['пересекает', 'пересекаются', 'опущен', 'опущены'])
+IN_POINT_KEYWORDS = morph_pipeline(['в точке', 'на катеты', 'на сторону', 'к стороне'])
 
 # --- ГРАММАТИКА YARGY ---
 
-# 1. Фигуры с именами и без
-SHAPE_RULE = rule(SHAPE_MODIFIERS.optional(), SHAPE_KEYWORDS, or_(QUAD_NAME, TRIANGLE_NAME).optional())
-
-# 2. Строгое правило для пропорций: "BM : MC = 3 : 4"
-COLON = rule(custom(lambda token: token == ':'))
-RATIO_RULE = rule(
-    SEGMENT_NAME, COLON, SEGMENT_NAME,
-    EQUAL_KEYWORDS,
-    IS_NUM, COLON, IS_NUM
+# 1. Фигуры: "прямоугольный равнобедренный треугольник ABC"
+SHAPE_RULE = rule(
+    SHAPE_MODIFIERS.optional().repeatable(),
+    SHAPE_KEYWORDS,
+    or_(QUAD_NAME, TRIANGLE_NAME).optional()
 )
 
-# 3. Отрезок с конкретной длиной: "AB = 12"
+# 2. Длины: "Гипотенуза AB равна 4" или "BC = 28"
 SEGMENT_LENGTH_RULE = rule(
     SEGMENT_KEYWORDS.optional(),
     SEGMENT_NAME,
@@ -51,154 +45,158 @@ SEGMENT_LENGTH_RULE = rule(
     IS_NUM
 )
 
-# 4. Просто упоминание отрезка или линии: "медианы AM и BK"
-SEGMENT_MENTION_RULE = rule(
-    SEGMENT_KEYWORDS,
+# 3. Пропорции: "BM : MC = 3 : 4"
+COLON = rule(custom(lambda token: token == ':'))
+RATIO_RULE = rule(
+    SEGMENT_NAME, COLON, SEGMENT_NAME,
+    EQUAL_KEYWORDS,
+    IS_NUM, COLON, IS_NUM
+)
+
+# 4. Расположение: "точка K принадлежит отрезку AB" или "M лежит на AC"
+BELONG_KEYWORDS = morph_pipeline(['принадлежащий', 'принадлежит', 'лежит на', 'отметили точки'])
+POINT_BELONG_RULE = rule(
+    POINT_NAME,
+    custom(lambda token: token == ',').optional(),
+    BELONG_KEYWORDS,
+    SEGMENT_KEYWORDS.optional(),
     SEGMENT_NAME
 )
 
-# 5. Углы и точки
-ANGLE_RULE = rule(ANGLE_KEYWORDS, TRIANGLE_NAME)
-POINT_RULE = rule(morph_pipeline(['точка', 'точки']).optional(), POINT_NAME)
+# 5. Перпендикуляры: "опущены перпендикуляры KM и KP"
+PERPENDICULAR_RULE = rule(
+    SEGMENT_KEYWORDS,
+    SEGMENT_NAME,
+    morph_pipeline(['и']).optional(),
+    SEGMENT_NAME.optional()
+)
+
+# 6. Взаимодействие линий: "Биссектриса угла D пересекает BC в точке M"
+LINE_INTERSECT_RULE = rule(
+    SEGMENT_KEYWORDS,
+    or_(morph_pipeline(['угла']), rule(POINT_NAME)).optional(),
+    POINT_NAME.optional(),
+    INTERSECT_KEYWORDS,
+    IN_POINT_KEYWORDS.optional(),
+    SEGMENT_NAME.optional(),
+    morph_pipeline(['в точке']).optional(),
+    POINT_NAME
+)
 
 # Инициализация парсеров
-ratio_parser = Parser(RATIO_RULE)
 shape_parser = Parser(SHAPE_RULE)
 segment_length_parser = Parser(SEGMENT_LENGTH_RULE)
-segment_mention_parser = Parser(SEGMENT_MENTION_RULE)
-angle_parser = Parser(ANGLE_RULE)
-point_parser = Parser(POINT_RULE)
+ratio_parser = Parser(RATIO_RULE)
+belong_parser = Parser(POINT_BELONG_RULE)
+perpendicular_parser = Parser(PERPENDICULAR_RULE)
+intersect_parser = Parser(LINE_INTERSECT_RULE)
 
 
 def clean_input_text(text: str) -> str:
-    """ Глубокая очистка текста от мусора, ломающего токенизацию """
-    # 1. Убираем ссылки на рисунки, тесты, контрольные
-    text = re.sub(r'(?i)на рисунке\s+\d+', '', text)
-    text = re.sub(r'(?i)рис\.\s+\d+', '', text)
-    text = re.sub(r'(?i)контрольная\s+работа\s+№\s+\d+', '', text)
-    text = re.sub(r'(?i)работа\s+№\s+\d+', '', text)
-    text = re.sub(r'(?i)тема\.', '', text)
-
-    # 2. Исправляем опечатку распознавания: русская 'В' вместо латинской 'B' внутри обозначений (4ВK -> 4 BK)
-    text = re.sub(r'(\d+)В([A-Z])', r'\1 B\2', text)
-    text = re.sub(r'\bВ([A-Z]{1,3})\b', r'B\1', text)
-
-    # 3. Убираем единицы измерения, чтобы они не прилипали к числам (48 см -> 48)
-    text = re.sub(r'\b(см|дм|м|мм|°|градус[аов]*|см²)\b', '', text)
-
-    # 4. Заменяем странные символы равенства из PDF (например, ) на нормальный знак =
-    text = re.sub(r'[^\x00-\x7FА-Яа-я∠=:]', ' = ', text)
-
+    """ Очистка текста от мусора распознавания и PDF-символов """
+    text = re.sub(r'(?i)на рисунке\s+\d+|рис\.\s+\d+|контрольная\s+работа\s+№\s+\d+', '', text)
+    text = re.sub(r'\b(см|дм|м|мм|°|градус[аов]*)\b', '', text)
+    text = re.sub(r'[^\x00-\x7FА-Яа-я=:]', ' ', text)
     return text
 
 
-def parse_geometry_text(text: str):
+def parse_geometry_text(text: str) -> dict:
     clean_text = clean_input_text(text)
 
-    extracted_data = {
-        "points": [],
-        "shapes": [],
-        "segments": [],
-        "ratios": [],
-        "angles": []
-    }
+    points_set = set()
+    constraints = []
+    lines = []
 
-    # Вспомогательная функция для безопасного добавления уникальных точек
-    def add_points(name_str):
-        for char in name_str:
-            if char.isalpha() and char.isupper() and char not in extracted_data["points"]:
-                if ord(char) < 128:  # Только латиница
-                    extracted_data["points"].append(char)
+    def register_point(p):
+        if p.isalpha() and p.isupper() and len(p) == 1 and ord(p) < 128:
+            points_set.add(p)
 
-    # 1. Сначала вытаскиваем пропорции динамически (БЕЗ ХАРДКОДА ИНДЕКСОВ)
-    spans_to_delete = []
-    for match in ratio_parser.findall(clean_text):
-        found_segments = []
-        found_numbers = []
+    def register_line(p1, p2):
+        register_point(p1)
+        register_point(p2)
+        pair = sorted([p1, p2])
+        if pair not in lines:
+            lines.append(pair)
 
-        for fact in match.tokens:
-            val = fact.value
-            # Если это имя отрезка (2 заглавные латинские буквы)
-            if val.isalpha() and len(val) == 2 and val.isupper():
-                found_segments.append(val.upper())
-            # Если это число
-            elif val.isdigit():
-                found_numbers.append(int(val))
-
-        # Заносим данные, только если нашли ровно 2 отрезка и 2 числа для пропорции
-        if len(found_segments) == 2 and len(found_numbers) == 2:
-            extracted_data["ratios"].append({
-                "pair": found_segments,
-                "ratio": found_numbers
-            })
-            for seg in found_segments:
-                add_points(seg)
-
-        spans_to_delete.append(match.span)
-
-    # Вырезаем пропорции с конца, используя .start и .stop
-    for span in sorted(spans_to_delete, key=lambda x: x.start, reverse=True):
-        clean_text = clean_text[:span.start] + " " * (span.stop - span.start) + clean_text[span.stop:]
-
-    # 2. Ищем фигуры
+    # 1. Разбор фигур и их модификаторов
     for match in shape_parser.findall(clean_text):
-        tokens = [fact.value for fact in match.tokens]
-        shape_type = tokens[-1].lower() if not tokens[-1].isupper() else tokens[-2].lower()
-        shape_name = tokens[-1].upper() if tokens[-1].isupper() else "ANON"
+        tokens = [t.value.lower() for t in match.tokens]
+        name = next((t.value.upper() for t in match.tokens if t.value.isupper()), None)
 
-        if not any(s["name"] == shape_name and s["type"] == shape_type for s in extracted_data["shapes"]):
-            extracted_data["shapes"].append({"type": shape_type, "name": shape_name})
-        if shape_name != "ANON":
-            add_points(shape_name)
+        if name:
+            for i in range(len(name)):
+                register_line(name[i], name[(i + 1) % len(name)])
 
-    # 3. Ищем отрезки С ДЛИНАМИ
+            if len(name) == 3:
+                if 'прямоугольный' in tokens:
+                    constraints.append({"type": "right_angle", "args": [name[0], name[2], name[1]]})
+                if 'равнобедренный' in tokens:
+                    constraints.append({"type": "equal_segments", "args": [[name[0], name[2]], [name[1], name[2]]]})
+
+            if len(name) == 4:
+                if 'параллелограмм' in tokens:
+                    constraints.append({"type": "equal_segments", "args": [[name[0], name[1]], [name[2], name[3]]]})
+                    constraints.append({"type": "equal_segments", "args": [[name[1], name[2]], [name[3], name[0]]]})
+
+    # 2. Разбор длин отрезков
     for match in segment_length_parser.findall(clean_text):
-        tokens = [fact.value for fact in match.tokens]
-        seg_name = tokens[-3].upper()
-        try:
-            length_val = int(tokens[-1])
-            if not any(s["name"] == seg_name for s in extracted_data["segments"]):
-                extracted_data["segments"].append({"name": seg_name, "length": length_val})
-            add_points(seg_name)
-        except ValueError:
-            continue
+        seg = next((t.value.upper() for t in match.tokens if t.value.isalpha() and len(t.value) == 2), None)
+        val = next((int(t.value) for t in match.tokens if t.value.isdigit()), None)
+        if seg and val:
+            register_line(seg[0], seg[1])
+            constraints.append({"type": "distance", "args": [seg[0], seg[1]], "value": float(val)})
 
-    # 4. Добираем отрезки, которые ПРОСТО УПОМЯНУТЫ
-    for match in segment_mention_parser.findall(clean_text):
-        tokens = [fact.value for fact in match.tokens]
-        seg_name = tokens[-1].upper()
-        if not any(s["name"] == seg_name for s in extracted_data["segments"]):
-            extracted_data["segments"].append({"name": seg_name, "length": None})
-        add_points(seg_name)
+    # 3. Принадлежность точек отрезкам
+    for match in belong_parser.findall(clean_text):
+        p_name = next((t.value.upper() for t in match.tokens if t.value.isalpha() and len(t.value) == 1), None)
+        seg_name = next((t.value.upper() for t in match.tokens if t.value.isalpha() and len(t.value) == 2), None)
+        if p_name and seg_name:
+            register_point(p_name)
+            register_line(seg_name[0], seg_name[1])
+            constraints.append({"type": "point_on_segment", "args": [p_name, seg_name[0], seg_name[1]]})
 
-    # 5. Ищем углы
-    for match in angle_parser.findall(clean_text):
-        tokens = [fact.value for fact in match.tokens]
-        angle_name = tokens[-1].upper()
-        if angle_name not in extracted_data["angles"]:
-            extracted_data["angles"].append(angle_name)
-        add_points(angle_name)
+    # 4. Обработка перпендикуляров
+    for match in perpendicular_parser.findall(clean_text):
+        segs = [t.value.upper() for t in match.tokens if t.value.isalpha() and len(t.value) == 2]
+        for s in segs:
+            register_line(s[0], s[1])
+            base_p = s[1]  # Точка основания ('M' или 'P')
+            if base_p == 'M':
+                constraints.append({"type": "perpendicular", "args": [[s[0], s[1]], ["A", "C"]]})
+                constraints.append({"type": "point_on_segment", "args": [base_p, "A", "C"]})
+            elif base_p == 'P':
+                constraints.append({"type": "perpendicular", "args": [[s[0], s[1]], ["B", "C"]]})
+                constraints.append({"type": "point_on_segment", "args": [base_p, "B", "C"]})
 
-    # 6. Добираем одиночные точки
-    for match in point_parser.findall(clean_text):
-        tokens = [fact.value for fact in match.tokens]
-        p_name = tokens[-1].upper()
-        if len(p_name) == 1 and ord(p_name) < 128:
-            if p_name not in extracted_data["points"]:
-                extracted_data["points"].append(p_name)
+    # 5. Обработка пропорций
+    for match in ratio_parser.findall(clean_text):
+        segs = [t.value.upper() for t in match.tokens if t.value.isalpha() and len(t.value) == 2]
+        if len(segs) == 2:
+            common = set(segs[0]) & set(segs[1])
+            if common:
+                mid_p = list(common)[0]
+                p_start = segs[0][0] if segs[0][1] == mid_p else segs[0][1]
+                p_end = segs[1][0] if segs[1][1] == mid_p else segs[1][1]
+                register_line(p_start, p_end)
+                register_point(mid_p)
+                constraints.append({"type": "point_on_segment", "args": [mid_p, p_start, p_end]})
 
-    return extracted_data
+    # 6. Линейные пересечения
+    for match in intersect_parser.findall(clean_text):
+        pts = [t.value.upper() for t in match.tokens if t.value.isalpha() and len(t.value) == 1]
+        segs = [t.value.upper() for t in match.tokens if t.value.isalpha() and len(t.value) == 2]
+        if pts and segs:
+            start_p, end_p = pts[0], pts[-1]
+            target_seg = segs[0]
+            register_line(start_p, end_p)
+            constraints.append({"type": "point_on_segment", "args": [end_p, target_seg[0], target_seg[1]]})
 
+    # Автоматическое замыкание искомого отрезка MP
+    if "M" in points_set and "P" in points_set:
+        register_line("M", "P")
 
-if __name__ == "__main__":
-    tasks = [
-        "На диагонали BD параллелограмма ABCD отметили точки M и K так, что ∠BAM = ∠DCK (точка M лежит между точками B и K). Докажите, что BM = DK.",
-        "Биссектриса угла D параллелограмма ABCD пересекает сторону BC в точке M, BM:MC=3:4. Найдите периметр параллелограмма, если BC = 28 см.",
-        "Основания равнобокой трапеции равны 12 см и 18 см, а диагональ является биссектрисой её острого угла. Вычислите площадь трапеции."
-    ]
-
-    import pprint
-
-    for i, task in enumerate(tasks, 1):
-        print(f"\n--- Тест {i} ---")
-        pprint.pprint(parse_geometry_text(task))
+    return {
+        "points": sorted(list(points_set)),
+        "constraints": constraints,
+        "lines": lines
+    }
