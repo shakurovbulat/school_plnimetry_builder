@@ -1,48 +1,61 @@
+from __future__ import annotations
+
+import argparse
 import json
-import os
-from parser import parse_geometry_text
+import sys
+from pathlib import Path
+
+try:
+    from backend.parser import parse_geometry_text
+except ModuleNotFoundError:
+    from parser import parse_geometry_text
 
 
-def load_exercises():
-    # Ищем файл exercises.json на один уровень выше или в текущей папке
-    file_name = 'exercises.json'
+ROOT_DIR = Path(__file__).resolve().parents[1]
+EXERCISES_PATH = ROOT_DIR / "exercises.json"
 
-    # Пытаемся найти файл в корне или в текущей папке
-    if os.path.exists(file_name):
-        path = file_name
-    elif os.path.exists(os.path.join('..', file_name)):
-        path = os.path.join('..', file_name)
-    else:
-        print(f"❌ Файл {file_name} не найден! Убедись, что он лежит в корне проекта.")
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="backslashreplace")
+
+
+def load_exercises() -> list[str]:
+    if not EXERCISES_PATH.exists():
+        print(f"Файл не найден: {EXERCISES_PATH}")
         return []
 
-    with open(path, 'r', encoding='utf-8') as f:
-        data = json.load(f)
-        return data.get('exercises', [])
+    with EXERCISES_PATH.open("r", encoding="utf-8") as file:
+        data = json.load(file)
+    return data.get("exercises", [])
 
 
-def run_tests():
+def run_tests(limit: int | None = None) -> None:
     exercises = load_exercises()
-    if not exercises:
-        return
+    if limit:
+        exercises = exercises[:limit]
 
-    print(f"🚀 Запуск тестирования парсера на {len(exercises)} задачах из учебника...\n")
-    print("=" * 70)
+    print(f"Parser smoke test: {len(exercises)} exercises")
+    print("=" * 80)
 
-    for idx, text in enumerate(exercises, 1):
-        print(f"\n📝 Задача №{idx}:")
-        print(f"Текст: \"{text}\"")
-
-        # Прогоняем через наш парсер
+    for index, text in enumerate(exercises, 1):
         result = parse_geometry_text(text)
-
-        # Красивый вывод результатов
-        print("-" * 30)
-
-        print(result)
-
-        print("=" * 70)
+        print(f"\n#{index}: {text[:180]}")
+        print(
+            json.dumps(
+                {
+                    "points": result["points"],
+                    "lines": result["lines"],
+                    "figures": result["figures"],
+                    "constraints_count": len(result["constraints"]),
+                    "targets": result["targets"],
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
 
 
 if __name__ == "__main__":
-    run_tests()
+    arg_parser = argparse.ArgumentParser()
+    arg_parser.add_argument("--limit", type=int, default=10)
+    args = arg_parser.parse_args()
+    run_tests(limit=args.limit)
