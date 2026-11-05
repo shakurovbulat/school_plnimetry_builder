@@ -116,7 +116,7 @@ def enrich_schema(raw, text):
             if m:
                 add("distance", pts[:2], val(m))
         if f["type"] == "rhombus":
-            m = re.search(r"диагонали\s+равны\s*(" + NUM + ")\s*и\s*(" + NUM + ")", text, re.I)
+            m = re.search(r"диагонали\s+равны\s*(" + NUM + r")\s*и\s*(" + NUM + ")", text, re.I)
             if m:
                 for seg, v in [(pts[::2], val(m)), (pts[1::2], val(m, 2))]:
                     line(*seg)

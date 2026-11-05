@@ -96,7 +96,7 @@ def enrich_extended(raw, text):
                 i = p.index(vertex)
                 add(trig[1], [p[i - 1], vertex, p[(i + 1) % 4]], v(trig, 3))
             m = re.search(
-                r"стороны\s+параллелограмма\s+равны\s*(" + N + ")\s+и\s*(" + N + ")", text, re.I
+                r"стороны\s+параллелограмма\s+равны\s*(" + N + r")\s+и\s*(" + N + ")", text, re.I
             )
             if m:
                 add("distance", [a, b], v(m))
@@ -115,7 +115,11 @@ def enrich_extended(raw, text):
                 add("distance", [c, d], v(m))
                 add("segment_difference", [[a, b], [c, d]], 0.001)
             m = re.search(
-                r"перпендикуляр.*?делит\s+его\s+на\s+части.*?длины\s*(" + N + ")\s+и\s*(" + N + ")",
+                r"перпендикуляр.*?делит\s+его\s+на\s+части.*?длины\s*("
+                + N
+                + r")\s+и\s*("
+                + N
+                + ")",
                 text,
                 re.I,
             )
@@ -238,7 +242,7 @@ def enrich_extended(raw, text):
     m = re.search(
         r"вписанный\s+угол\s+([A-Z]{3}).*?на\s*("
         + N
-        + ")\s*°?\s*меньше\s+центрального\s+угла\s+([A-Z]{3})",
+        + r")\s*°?\s*меньше\s+центрального\s+угла\s+([A-Z]{3})",
         text,
         re.I,
     )
