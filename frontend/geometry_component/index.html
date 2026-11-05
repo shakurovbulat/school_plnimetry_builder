@@ -1,0 +1,43 @@
+<!doctype html><html lang="ru"><meta charset="utf-8"><style>body{margin:0;font:14px system-ui;color:#19314b}canvas{width:100%;height:540px;touch-action:none;background:#f8fafc;border:1px solid #cbd5e1;border-radius:8px}button{margin:4px;padding:7px}p{margin:5px}</style>
+<button id="reset">Сбросить вид</button><span> Колесо / pinch — масштаб · фон — перемещение · точка — редактирование</span><canvas id="c"></canvas><p id="status"></p>
+<script>
+const canvas=document.getElementById('c'),ctx=canvas.getContext('2d');
+let sol=null,scale=40,ox=300,oy=280,drag=null,points={},pointers=new Map(),pinch=null;
+function send(type,extra={}){parent.postMessage({isStreamlitMessage:true,type,...extra},'*')}
+function fit(){if(!sol)return;const all=Object.values(points).map(p=>[...p]);for(const c of sol.circles||[]){const [x,y]=c.center_coords,r=c.radius;all.push([x-r,y-r],[x+r,y+r])}const xs=all.map(p=>p[0]),ys=all.map(p=>p[1]);let xmin=Math.min(...xs),xmax=Math.max(...xs),ymin=Math.min(...ys),ymax=Math.max(...ys);scale=Math.min(canvas.width/(xmax-xmin+2),canvas.height/(ymax-ymin+2))*.8;ox=canvas.width/2-(xmin+xmax)/2*scale;oy=canvas.height/2+(ymin+ymax)/2*scale;draw()}
+const screen=p=>[p[0]*scale+ox,oy-p[1]*scale],world=(x,y)=>[(x-ox)/scale,(oy-y)/scale];
+function drawMarkers(){
+  ctx.strokeStyle='#059669';ctx.lineWidth=1.3;
+  for(const c of sol.schema?.constraints||[]){
+    if(!['angle','right_angle'].includes(c.type))continue;
+    const [a,v,b]=c.args.map(n=>points[n]);if(!a||!v||!b)continue;
+    const origin=screen(v),pa=screen(a),pb=screen(b);
+    const u=[pa[0]-origin[0],pa[1]-origin[1]],w=[pb[0]-origin[0],pb[1]-origin[1]];
+    const nu=Math.hypot(...u),nw=Math.hypot(...w);if(nu<1||nw<1)continue;
+    const radius=Math.min(18,nu*.2,nw*.2);
+    ctx.beginPath();
+    if(c.type==='right_angle'){
+      const q=[u[0]/nu*radius,u[1]/nu*radius],r=[w[0]/nw*radius,w[1]/nw*radius];
+      ctx.moveTo(origin[0]+q[0],origin[1]+q[1]);
+      ctx.lineTo(origin[0]+q[0]+r[0],origin[1]+q[1]+r[1]);
+      ctx.lineTo(origin[0]+r[0],origin[1]+r[1]);
+    }else{
+      let start=Math.atan2(u[1],u[0]),end=Math.atan2(w[1],w[0]);
+      let delta=((end-start)%(2*Math.PI)+2*Math.PI)%(2*Math.PI);
+      if(delta>Math.PI)[start,end]=[end,start];
+      ctx.arc(origin[0],origin[1],radius,start,end);
+    }
+    ctx.stroke();
+  }
+}
+function draw(){ctx.clearRect(0,0,canvas.width,canvas.height);if(!sol)return;ctx.strokeStyle='#1e40af';ctx.lineWidth=2;for(const [a,b] of sol.lines){if(!points[a]||!points[b])continue;ctx.beginPath();ctx.moveTo(...screen(points[a]));ctx.lineTo(...screen(points[b]));ctx.stroke()}for(const c of sol.circles||[]){ctx.beginPath();ctx.arc(...screen(c.center_coords),c.radius*scale,0,Math.PI*2);ctx.stroke()}drawMarkers();for(const [n,p] of Object.entries(points)){const [x,y]=screen(p);ctx.fillStyle=drag?.name===n?'#e11d48':'#2563eb';ctx.beginPath();ctx.arc(x,y,6,0,Math.PI*2);ctx.fill();ctx.fillStyle='#0f172a';ctx.font='bold 16px system-ui';ctx.fillText(n,x+10,y-10)}}
+function local(e){const r=canvas.getBoundingClientRect();return [(e.clientX-r.left)*canvas.width/r.width,(e.clientY-r.top)*canvas.height/r.height]}
+canvas.onpointerdown=e=>{canvas.setPointerCapture(e.pointerId);let [x,y]=local(e);pointers.set(e.pointerId,[x,y]);if(pointers.size===2){let [a,b]=[...pointers.values()];pinch={dist:Math.hypot(a[0]-b[0],a[1]-b[1]),scale};drag=null;return}let name=Object.keys(points).find(n=>{const p=screen(points[n]);return Math.hypot(p[0]-x,p[1]-y)<14});drag={name,x,y,ox,oy}};
+canvas.onpointermove=e=>{let [x,y]=local(e);if(pointers.has(e.pointerId))pointers.set(e.pointerId,[x,y]);if(pinch&&pointers.size===2){let [a,b]=[...pointers.values()];const old=scale;scale=Math.max(.5,Math.min(3000,pinch.scale*Math.hypot(a[0]-b[0],a[1]-b[1])/Math.max(pinch.dist,1)));const cx=(a[0]+b[0])/2,cy=(a[1]+b[1])/2;ox=cx-(cx-ox)*scale/old;oy=cy-(cy-oy)*scale/old;draw();return}if(!drag)return;if(drag.name)points[drag.name]=world(x,y);else{ox=drag.ox+x-drag.x;oy=drag.oy+y-drag.y}draw()};
+canvas.onpointerup=e=>{pointers.delete(e.pointerId);pinch=null;if(drag?.name){const name=drag.name,coords=points[name];points=structuredClone(sol.points);draw();document.getElementById('status').textContent='Проверка нового положения на сервере…';send('streamlit:setComponentValue',{value:{id:Date.now(),point_name:name,new_coords:coords}})}drag=null};
+canvas.onpointercancel=()=>{drag=null;pinch=null;pointers.clear();if(sol)points=structuredClone(sol.points);draw()};
+canvas.onwheel=e=>{e.preventDefault();const [x,y]=local(e),old=scale;scale=Math.max(.5,Math.min(3000,scale*Math.exp(-e.deltaY*.001)));ox=x-(x-ox)*scale/old;oy=y-(y-oy)*scale/old;draw()};
+document.getElementById('reset').onclick=fit;
+window.addEventListener('message',e=>{if(e.data.type!=='streamlit:render')return;const previous=sol;sol=e.data.args.solution;points=structuredClone(sol.points);canvas.width=Math.max(400,document.body.clientWidth-3);canvas.height=540;if(!previous||e.data.args.reset)fit();else draw();document.getElementById('status').textContent='';send('streamlit:setFrameHeight',{height:605})});
+send('streamlit:componentReady',{apiVersion:1});
+</script></html>

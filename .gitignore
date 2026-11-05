@@ -1,0 +1,26 @@
+# Local configuration and user data
+.env
+.env.*
+!.env.example
+/data/
+
+# Environments, dependencies and caches
+.venv/
+venv/
+.tools/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Generated test reports and drawings
+/artifacts/
+*.log
+
+# Editor and operating-system files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

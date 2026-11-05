@@ -1,111 +1,144 @@
-from __future__ import annotations
+"""Local interface for building and editing planimetry drawings."""
 
 import os
+import sys
+from datetime import datetime
+from pathlib import Path
 
-import matplotlib.pyplot as plt
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import requests
 import streamlit as st
+import streamlit.components.v1 as components
 
+from backend.sample_tasks import EXERCISES
+from frontend.drawing import export_drawing
+from frontend.highlight import highlight_condition
 
-DEFAULT_TEXT = (
-    "В прямоугольном равнобедренном треугольнике ABC гипотенуза AB равна 14 см. "
-    "Из точки F, принадлежащей отрезку AB, на катеты AC и BC соответственно "
-    "опущены перпендикуляры FM и FN."
+st.set_page_config(page_title="Построитель чертежей", page_icon="📐", layout="wide")
+API = os.getenv("GEOMETRY_API_URL", "http://127.0.0.1:8000").rstrip("/")
+canvas = components.declare_component(
+    "geometry_canvas", path=str(Path(__file__).parent / "geometry_component")
 )
 
-API_URL = os.getenv("GEOMETRY_API_URL", "http://127.0.0.1:8000")
 
-
-def draw_schema(points: dict[str, list[float]], lines: list[list[str]]):
-    fig, ax = plt.subplots(figsize=(7, 7))
-
-    for line in lines:
-        if line[0] not in points or line[1] not in points:
-            continue
-        p1, p2 = points[line[0]], points[line[1]]
-        ax.plot([p1[0], p2[0]], [p1[1], p2[1]], color="#2563eb", lw=2.2)
-        mid_x, mid_y = (p1[0] + p2[0]) / 2, (p1[1] + p2[1]) / 2
-        ax.text(mid_x, mid_y, "".join(line), fontsize=9, color="#334155")
-
-    for name, coords in points.items():
-        ax.scatter(coords[0], coords[1], s=52, color="#dc2626", zorder=3)
-        ax.text(coords[0] + 0.08, coords[1] + 0.08, name, fontsize=13, weight="bold")
-
-    ax.grid(True, linestyle="--", alpha=0.35)
-    ax.set_aspect("equal", adjustable="datalim")
-    ax.margins(0.2)
-    ax.axis("off")
-    return fig
-
-
-st.set_page_config(page_title="GeoSolver", layout="wide")
-
-st.title("Интерактивный построитель планиметрии")
-st.caption("Парсит условие, выделяет фигуры и ограничения, строит приближенный чертеж.")
-
-with st.sidebar:
-    st.header("Backend")
-    api_url = st.text_input("API URL", value=API_URL)
-    show_debug = st.checkbox("Показывать JSON парсера", value=True)
-
-user_input = st.text_area(
-    "Условие задачи",
-    value=DEFAULT_TEXT,
-    height=180,
-    placeholder="Например: Треугольник ABC. AB = 4, BC = 3, AC = 5.",
-)
-
-col_run, col_status = st.columns([1, 4])
-run_clicked = col_run.button("Построить", type="primary", use_container_width=True)
-status_box = col_status.empty()
-
-if run_clicked:
-    text = user_input.strip()
-    if not text:
-        st.warning("Введите условие задачи.")
-    else:
-        with st.spinner("Разбираю условие и считаю координаты..."):
-            try:
-                response = requests.post(f"{api_url.rstrip('/')}/solve", json={"text": text}, timeout=20)
-                response.raise_for_status()
-                data = response.json()
-            except requests.exceptions.ConnectionError:
-                st.error("Не удалось подключиться к FastAPI. Запустите backend/main.py на порту 8000.")
-                st.stop()
-            except requests.RequestException as exc:
-                st.error(f"Ошибка запроса к backend: {exc}")
-                st.stop()
-
-        points = data.get("points", {})
-        lines = data.get("lines", [])
-        diagnostics = data.get("diagnostics", {})
-        parser_data = data.get("parser_data", {})
-
-        if not points:
-            st.warning("Парсер не нашел точек для построения.")
-            st.stop()
-
-        status_box.success(
-            f"Готово: точек {len(points)}, линий {len(lines)}, "
-            f"ограничений {len(parser_data.get('constraints', []))}."
+def post(endpoint, payload):
+    response = requests.post(f"{API}/{endpoint}", json=payload, timeout=240)
+    if not response.ok:
+        detail = response.json().get("detail", "Ошибка запроса")
+        raise ValueError(
+            detail if isinstance(detail, str) else "Некорректные данные. Проверьте условие задачи."
         )
+    return response.json()
 
-        chart_col, info_col = st.columns([2, 1])
-        with chart_col:
-            st.pyplot(draw_schema(points, lines), clear_figure=True)
 
-        with info_col:
-            st.subheader("Диагностика")
-            st.write(diagnostics or {"status": "unknown"})
-            st.subheader("Что найдено")
-            st.write(
-                {
-                    "figures": parser_data.get("figures", []),
-                    "givens": parser_data.get("givens", []),
-                    "targets": parser_data.get("targets", []),
-                }
+st.title("📐 Построитель чертежей для школьной планиметрии")
+st.caption("Локальная нейросеть распознаёт условие, геометрическое ядро проверяет построение.")
+with st.sidebar:
+    st.header("Готовые примеры")
+    preset = st.selectbox("Задача", list(EXERCISES))
+    if st.button("Загрузить пример"):
+        st.session_state["task_text"] = EXERCISES[preset]
+    st.info(
+        "Данные обрабатываются локально. Сложные и неоднозначные условия могут потребовать уточнения."
+    )
+    if st.button("Обновить историю"):
+        try:
+            response = requests.get(f"{API}/history", timeout=10)
+            response.raise_for_status()
+            st.session_state["history"] = response.json()
+        except (requests.RequestException, ValueError):
+            st.warning("История недоступна")
+    history = st.session_state.get("history", [])
+    if history:
+        selected = st.selectbox(
+            "Сохранённые построения",
+            range(len(history)),
+            format_func=lambda i: f"#{history[i]['id']} {history[i]['text'][:60]}",
+        )
+        if st.button("Открыть построение"):
+            try:
+                response = requests.get(f"{API}/history/{history[selected]['id']}", timeout=10)
+                response.raise_for_status()
+                item = response.json()
+                st.session_state["solution"] = item["result"]
+                st.session_state["task_text"] = item["text"]
+                st.session_state["solution_text"] = item["text"]
+                st.session_state["drawing_version"] = st.session_state.get("drawing_version", 0) + 1
+            except (requests.RequestException, ValueError):
+                st.error("Не удалось открыть чертёж")
+text = st.text_area("Условие задачи", key="task_text", height=140)
+if st.button("Сгенерировать чертёж", type="primary"):
+    if not text.strip():
+        st.warning("Поле ввода не может быть пустым")
+    else:
+        try:
+            with st.spinner("Распознаю условие и проверяю геометрию…"):
+                st.session_state["solution"] = post("solve", {"text": text})
+                st.session_state["solution_text"] = text
+            st.session_state["drawing_version"] = st.session_state.get("drawing_version", 0) + 1
+            st.success("Чертёж построен. Ограничения проверены численно.")
+        except (requests.RequestException, ValueError) as exc:
+            st.session_state.pop("solution", None)
+            st.error(f"Не удалось построить чертёж: {exc}")
+if "solution" in st.session_state:
+    sol = st.session_state["solution"]
+    source_text = st.session_state.get("solution_text", text)
+    if text != source_text:
+        st.warning(
+            "Условие изменено. На экране прежний чертёж — нажмите «Сгенерировать чертёж» для обновления."
+        )
+    with st.expander("Распознанные обозначения и числа в условии"):
+        st.markdown(highlight_condition(source_text, sol["schema"]), unsafe_allow_html=True)
+        st.caption(
+            "Подсветка показывает совпадения обозначений и чисел, а не подтверждает полноту понимания текста."
+        )
+    for warning in sol.get("warnings", []):
+        st.warning(warning)
+    left, right = st.columns([3, 1])
+    with left:
+        event = canvas(
+            solution=sol, key=f"drawing-{st.session_state.get('drawing_version', 0)}", default=None
+        )
+        if event and event.get("id") != st.session_state.get("last_edit"):
+            st.session_state["last_edit"] = event["id"]
+            try:
+                with st.spinner("Пересчитываю зависимые объекты…"):
+                    updated = post(
+                        "update-point",
+                        {
+                            "schema_data": sol["schema"],
+                            "points": sol["points"],
+                            "point_name": event["point_name"],
+                            "new_coords": event["new_coords"],
+                        },
+                    )
+                st.session_state["solution"] = {**sol, **updated}
+                st.session_state["drawing_version"] += 1
+                st.rerun()
+            except (requests.RequestException, ValueError) as exc:
+                st.warning(f"Перемещение отклонено; сохранён исходный чертёж. {exc}")
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        a, b = st.columns(2)
+        for col, fmt in [(a, "png"), (b, "svg")]:
+            col.download_button(
+                f"Скачать {fmt.upper()}",
+                export_drawing(sol, fmt),
+                file_name=f"geometry_drawing_{stamp}.{fmt}",
+                mime="image/png" if fmt == "png" else "image/svg+xml",
             )
-
-        if show_debug:
-            st.subheader("Parser JSON")
-            st.json(parser_data)
+    with right:
+        st.subheader("Распознанные объекты")
+        st.write("Точки: " + ", ".join(sol["points"]))
+        for f in sol.get("figures", []):
+            st.write(f"{f['name']} — {f['type']}")
+        st.caption(sol.get("parser_engine", ""))
+        st.subheader("Параметры и отношения")
+        for c in sol["schema"].get("constraints", []):
+            label = f"{c['type']}: {c['args']}"
+            if c.get("value") is not None:
+                st.write(f"{label} = {c['value']}")
+            else:
+                st.success(label)
+        st.caption(
+            "Численная проверка ограничений не заменяет математическое доказательство. Нераспознанные детали могут отсутствовать: сверьте список с условием."
+        )
