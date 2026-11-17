@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from backend.editing import delete_point_schema
 from backend.llm_parser import get_llm_json_schema, parse_task, provider_status
 from backend.models import GeometrySchema
 from backend.sympy_solver import SympyGeometrySolver
@@ -56,8 +57,11 @@ class DrawingRequest(BaseModel):
     points: dict[str, list[float]]
 
 
-class PointUpdateRequest(DrawingRequest):
+class PointDeleteRequest(DrawingRequest):
     point_name: str
+
+
+class PointUpdateRequest(PointDeleteRequest):
     new_coords: list[float] = Field(min_length=2, max_length=2)
 
 
@@ -162,6 +166,31 @@ def update_point(request: PointUpdateRequest):
         return {
             "status": "success",
             "schema": request.schema_data.model_dump(),
+            **result,
+        }
+    except ValueError as exc:
+        raise HTTPException(422, detail=str(exc)) from exc
+
+
+@app.post("/delete-point")
+def delete_point(request: PointDeleteRequest):
+    try:
+        original = SympyGeometrySolver(request.schema_data)
+        error, _ = original.validate_points(request.points)
+        if error > original.TOLERANCE:
+            raise ValueError("Исходный чертёж нарушает ограничения")
+        schema, removed = delete_point_schema(request.schema_data, request.point_name)
+        remaining = {name: request.points[name] for name in schema.points}
+        solver = SympyGeometrySolver(schema)
+        # Keep the current configuration if possible, recompute if necessary.
+        try:
+            result = solver.solve(initial_points=remaining, fixed_points=remaining)
+        except ValueError:
+            result = solver.solve(initial_points=remaining)
+        return {
+            "status": "success",
+            "schema": schema.model_dump(),
+            "removed": removed,
             **result,
         }
     except ValueError as exc:

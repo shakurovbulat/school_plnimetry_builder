@@ -8,6 +8,8 @@ import requests
 import streamlit as st
 import streamlit.components.v1 as components
 
+from backend.editing import delete_point_schema
+from backend.models import GeometrySchema
 from backend.sample_tasks import EXERCISES
 from frontend.drawing import export_drawing
 from frontend.presentation import FIGURES, constraint_label
@@ -150,7 +152,72 @@ if "solution" in st.session_state:
             )
     with right, st.container(border=True):
         st.subheader("Объекты и связи")
-        st.write("**Точки:** " + ", ".join(sol["points"]))
+        st.write("**Точки:**")
+        version = st.session_state.get("drawing_version", 0)
+        for name in sol["points"]:
+            label, action = st.columns([1, 2])
+            label.write(name)
+            if action.button(
+                "Удалить", key=f"delete-{version}-{name}",
+                disabled=len(sol["points"]) <= 1,
+                use_container_width=True,
+            ):
+                st.session_state["pending_delete"] = (version, name)
+        pending = st.session_state.get("pending_delete")
+        if pending and pending[0] != version:
+            st.session_state.pop("pending_delete", None)
+            pending = None
+        if pending:
+            name = pending[1]
+            _, removed = delete_point_schema(
+                GeometrySchema.model_validate(sol["schema"]), name
+            )
+            st.warning(f"Удалить точку {name}?")
+            details = [
+                "Отрезок " + "–".join(line) for line in removed["lines"]
+            ] + [
+                f"{FIGURES.get(f['type'], f['type'])} {f['name']}"
+                for f in removed["figures"]
+            ] + [
+                f"Окружность {c['name']}" for c in removed["circles"]
+            ] + [constraint_label(c) for c in removed["constraints"]]
+            if details:
+                st.caption("Также будут удалены связанные элементы:")
+                for detail in details:
+                    st.write("• " + detail)
+            for key, title in [("givens", "Исходные факты"), ("targets", "Цели задачи")]:
+                if removed[key]:
+                    st.write(f"**{title}, которые будут удалены:**")
+                    for item in removed[key]:
+                        st.json(item, expanded=False)
+            st.caption(
+                "Чертёж будет пересчитан. Остальные точки не удаляются. "
+                "Изменения не записываются в историю."
+            )
+            confirm, cancel = st.columns(2)
+            if confirm.button("Подтвердить", key=f"confirm-delete-{version}"):
+                try:
+                    with st.spinner("Удаляю точку и пересчитываю чертёж…"):
+                        updated = post("delete-point", {
+                            "schema_data": sol["schema"],
+                            "points": sol["points"],
+                            "point_name": name,
+                        })
+                    st.session_state["solution"] = {
+                        **sol, **updated,
+                        "warnings": sol.get("warnings", []) + [
+                            f"Точка {name} удалена вместе со связанными элементами. "
+                            "Чертёж изменён вручную и может не соответствовать исходному условию."
+                        ],
+                    }
+                    st.session_state["drawing_version"] = version + 1
+                    st.session_state.pop("pending_delete", None)
+                    st.rerun()
+                except (requests.RequestException, ValueError) as exc:
+                    st.error(f"Удаление отклонено; сохранён прежний чертёж. {exc}")
+            if cancel.button("Отмена", key=f"cancel-delete-{version}"):
+                st.session_state.pop("pending_delete", None)
+                st.rerun()
         for figure in sol.get("figures", []):
             st.write(f"{FIGURES.get(figure['type'], figure['type'])} {figure['name']}")
         st.divider()
