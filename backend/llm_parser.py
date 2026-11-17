@@ -1,140 +1,121 @@
-"""Local structured extraction through Ollama's native API."""
+"""Apilsin recognition with structured response validation."""
+
+import json
+from pathlib import Path
+from typing import Literal
 
 import requests
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from backend.config import settings
 from backend.models import GeometrySchema
-from backend.parser import parse_geometry_text
-from backend.semantic_validation import (
-    check_supported_text,
-    preserve_explicit_facts,
-    verify_coverage,
-)
-from backend.text_normalization import given_text
 
-SYSTEM_PROMPT = """Ты формализуешь школьные задачи по планиметрии. Верни только JSON по заданной схеме.
-points: уникальные имена A, B, A1, O1 (индексы допустимы). lines: пары имён точек.
-figures: type, name, points по порядку обхода. Не выдумывай числовые данные.
-constraints: distance [A,B] value=длина; angle [A,B,C] value=градусы (вершина B);
-right_angle [A,B,C]; midpoint [M,A,B]; projection [H,P,A,B] (H проекция P на AB);
-point_on_segment [M,A,B]; point_on_line [M,A,B];
-parallel/perpendicular/equal_segments [[A,B],[C,D]];
-ratio [[A,M],[M,B]] value=[3,4]; bisector [B,M,A,C] (BM биссектриса ABC).
-sin/cos/tg [A,B,C] value=значение функции, не угол в градусах.
-circumscribed_circle [O,A,B,C] (либо [O,A,B,C,D]); inscribed_circle [I,A,B,C].
-Пример ограничения: {"type":"distance","args":["A","B"],"value":5}.
-Прямой угол указывай явно в right_angle; тип right_triangle не определяет вершину.
-Для прямоугольного треугольника лучше используй type triangle + right_angle.
-circles: name, center (имя точки), radius либо null, passing_through.
-Включай все используемые точки в points. Не добавляй условие из того, что требуется доказать.
-Не вычисляй новые числовые длины или углы: сохраняй только явно заданные числа.
-Угол C в ABC кодируется [A,C,B], угол A кодируется [B,A,C].
-sin угла A = 0.6 кодируется {"type":"sin","args":["B","A","C"],"value":0.6}.
-Квадрат ABCD имеет прямые углы ABC, BCD, CDA, DAB, но НЕ ACD.
-tangent [O,T,P]: T на окружности с центром O, TP касательная.
-external_tangency [O1,O2,T]: внешнее касание окружностей в T.
-distinct [A,B]: различные точки; acute_angle [A,B,C]: острый угол B.
-inside_triangle [P,A,B,C]: P строго внутри ABC.
-product_equal [[A,B],[C,D],[A,D],[B,C]] означает AB*CD=AD*BC.
-ratio_equal [[A,M],[M,B],[A,N],[N,C]] означает AM/MB=AN/NC.
-Неизвестный угол α НЕ равен нулю: цепочку ∠PAB=∠PBC=∠PCA запиши двумя equal_angles,
-без value: [[P,A,B],[P,B,C]] и [[P,B,C],[P,C,A]]. Никогда не заменяй неизвестное число нулём.
-Для окружности проверь наличие её центра и всех passing_through в points.
-Если объектов нет, верни пустые списки. Для чисел используй JSON numbers, а не строки.
-"""
+SYSTEM_PROMPT = (
+    Path(__file__).with_name("recognition_prompt.md").read_text(encoding="utf-8")
+)
+
+
+class Recognition(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    status: Literal["ok", "needs_clarification", "unsupported"]
+    message: str
+    warnings: list[str] = Field(default_factory=list)
+    geometry: GeometrySchema | None
+
+
+class ProviderError(RuntimeError):
+    """Safe provider error without credentials, response bodies or request headers."""
 
 
 def get_llm_json_schema() -> dict:
     return GeometrySchema.model_json_schema()
 
 
-def parse_with_llm(text: str, model: str | None = None) -> GeometrySchema:
-    check_supported_text(text)
-    draft = parse_geometry_text(text)
-    raw_draft = draft
-    import json
+def provider_status() -> dict:
+    return {
+        "provider": "apilsin",
+        "model": settings.model,
+        "configured": bool(settings.api_key),
+    }
 
-    draft = {k: draft.get(k, []) for k in GeometrySchema.model_fields}
-    user_content = (
-        given_text(text)
-        + "\n\nПредварительная схема детерминированного парсера (проверь её по условию, "
-        "сохрани верные ограничения, исправь только ошибки):\n"
-        + json.dumps(draft, ensure_ascii=False)
-    )
+
+def parse_task(
+    text: str, model: str | None = None
+) -> tuple[GeometrySchema, str, list[str]]:
+    if not settings.api_key:
+        raise ProviderError(
+            "Не настроен APILSIN_API_KEY или файл APILSIN_KEY_FILE с одним ключом."
+        )
+    selected = model or settings.model
+    # The documented gateway guarantees chat completions, not strict json_schema mode.
+    # Supply the schema in the prompt and validate the returned JSON locally.
+    payload = {
+        "model": selected,
+        "messages": [
+            {
+                "role": "system",
+                "content": SYSTEM_PROMPT
+                + "\n\nJSON Schema ответа:\n"
+                + json.dumps(Recognition.model_json_schema(), ensure_ascii=False),
+            },
+            {"role": "user", "content": text},
+        ],
+        "stream": False,
+        "max_tokens": settings.max_tokens,
+    }
     try:
         response = requests.post(
-            f"{settings.ollama_url}/api/chat",
-            json={
-                "model": model or settings.ollama_model,
-                "messages": [
-                    {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user", "content": user_content},
-                ],
-                "format": get_llm_json_schema(),
-                "stream": False,
-                "think": False,
-                "keep_alive": "5m",
-                "options": {
-                    "temperature": 0,
-                    "num_ctx": settings.ollama_context,
-                    "num_predict": 2048,
-                },
-            },
-            timeout=(5, settings.ollama_timeout),
+            f"{settings.api_url}/chat/completions",
+            headers={"Authorization": f"Bearer {settings.api_key}"},
+            json=payload,
+            timeout=(10, settings.timeout),
         )
-        response.raise_for_status()
-    except requests.RequestException as exc:
-        raise RuntimeError(
-            "Ollama недоступна или модель не загружена. Проверьте ollama serve и ollama list."
-        ) from exc
+    except requests.Timeout:
+        raise ProviderError("Apilsin не ответил вовремя. Попробуйте позже.") from None
+    except requests.RequestException:
+        raise ProviderError("Не удалось связаться с Apilsin.") from None
+    if response.status_code != 200:
+        messages = {
+            400: "Apilsin отклонил запрос: проверьте ID модели и параметры API.",
+            401: "Apilsin: API-ключ недействителен или отключён.",
+            402: "Apilsin: недостаточно средств или исчерпан лимит расходов.",
+            429: "Apilsin: превышен лимит запросов или расходов. Попробуйте позже.",
+        }
+        raise ProviderError(
+            messages.get(
+                response.status_code,
+                f"Apilsin недоступен (HTTP {response.status_code}).",
+            )
+        )
     try:
-        schema = GeometrySchema.model_validate_json(response.json()["message"]["content"])
-    except (ValueError, KeyError, TypeError) as exc:
+        choice = response.json()["choices"][0]
+        if choice.get("finish_reason") not in ("stop", None):
+            raise ProviderError(
+                "Ответ модели прерван или отклонён. Полная схема не получена."
+            )
+        message = choice["message"]
+        if message.get("refusal"):
+            raise ValueError("Модель отказалась распознавать условие.")
+        result = Recognition.model_validate_json(message["content"])
+    except (KeyError, IndexError, TypeError, ValidationError, json.JSONDecodeError):
         raise ValueError(
-            f"Ollama вернула некорректную геометрическую схему: {str(exc)[:1600]}"
-        ) from exc
-    if not schema.points:
-        raise ValueError("Не удалось распознать геометрические фигуры на чертеже")
-    return preserve_explicit_facts(schema, raw_draft)
-
-
-def parse_hybrid(text: str, model: str | None = None, mode: str | None = None):
-    """Explicit engine selection: service failures never trigger a hidden fallback."""
-    selected = mode or settings.parser_mode
-    if selected == "ollama":
-        return parse_with_llm(
-            text, model
-        ), f"Ollama ({model or settings.ollama_model}) + проверенные конструкции правил"
-    if selected != "rules":
-        raise ValueError("Неизвестный режим парсера")
-    check_supported_text(text)
-    raw = parse_geometry_text(text)
-    schema = GeometrySchema.model_validate({k: raw.get(k, []) for k in GeometrySchema.model_fields})
-    verify_coverage(raw["clean_text"], schema)
-    if not schema.points:
-        raise ValueError("Не удалось распознать геометрические фигуры на чертеже")
-    return schema, "Правила (без LLM)"
-
-
-def ollama_status() -> dict:
-    try:
-        response = requests.get(f"{settings.ollama_url}/api/tags", timeout=5)
-        response.raise_for_status()
-        models = [m["name"] for m in response.json().get("models", [])]
-        running = requests.get(f"{settings.ollama_url}/api/ps", timeout=5)
-        running.raise_for_status()
-        return {
-            "available": True,
-            "model": settings.ollama_model,
-            "model_installed": settings.ollama_model in models,
-            "models": models,
-            "running": running.json().get("models", []),
-        }
-    except (requests.RequestException, ValueError, KeyError):
-        return {
-            "available": False,
-            "model": settings.ollama_model,
-            "model_installed": False,
-            "models": [],
-            "running": [],
-        }
+            "Модель вернула некорректный JSON или геометрическую схему."
+        ) from None
+    if result.status != "ok":
+        raise ValueError(
+            result.message or "Нужно уточнить условие или оно не поддерживается."
+        )
+    if result.geometry is None or not result.geometry.points:
+        raise ValueError("Модель не распознала геометрические объекты.")
+    if any(
+        c.type.value in {"circle_center", "segment_difference"}
+        for c in result.geometry.constraints
+    ):
+        raise ValueError(
+            "Модель использовала ограничение, не поддерживаемое точно решателем."
+        )
+    return (
+        result.geometry,
+        f"Apilsin ({selected}) — прямое распознавание",
+        result.warnings,
+    )

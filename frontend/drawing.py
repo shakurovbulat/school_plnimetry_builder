@@ -12,14 +12,20 @@ def render_drawing(solution):
     ax = fig.subplots()
     points = {n: np.array(v) for n, v in solution["points"].items()}
     for a, b in solution["lines"]:
-        ax.plot(*zip(points[a], points[b]), color="#1e40af", linewidth=1.8)
+        ax.plot(*zip(points[a], points[b]), color="#244b70", linewidth=1.8)
     for c in solution.get("circles", []):
         ax.add_patch(
-            Circle(c["center_coords"], c["radius"], fill=False, color="#0284c7", linewidth=1.5)
+            Circle(
+                c["center_coords"],
+                c["radius"],
+                fill=False,
+                color="#087f8c",
+                linewidth=1.5,
+            )
         )
     span = max(np.ptp(np.array(list(points.values())), axis=0).max(), 1)
     for n, p in points.items():
-        ax.plot(*p, "o", color="#2563eb", markersize=4)
+        ax.plot(*p, "o", color="#087f8c", markersize=4)
         ax.annotate(n, p, xytext=(7, 7), textcoords="offset points", weight="bold")
     for c in solution.get("schema", {}).get("constraints", []):
         if c["type"] not in ("right_angle", "angle"):
@@ -32,10 +38,15 @@ def render_drawing(solution):
             q = np.array([v + u * r, v + (u + w) * r, v + w * r])
             ax.plot(q[:, 0], q[:, 1], color="#059669", linewidth=1)
         else:
-            start, end = np.degrees(np.arctan2(u[1], u[0])), np.degrees(np.arctan2(w[1], w[0]))
+            start, end = (
+                np.degrees(np.arctan2(u[1], u[0])),
+                np.degrees(np.arctan2(w[1], w[0])),
+            )
             if (end - start) % 360 > 180:
                 start, end = end, start
-            ax.add_patch(Arc(v, r * 3, r * 3, theta1=start, theta2=end, color="#059669"))
+            ax.add_patch(
+                Arc(v, r * 3, r * 3, theta1=start, theta2=end, color="#059669")
+            )
     ax.relim()
     ax.autoscale_view()
     ax.margins(0.2)

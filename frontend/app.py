@@ -1,5 +1,3 @@
-"""Local interface for building and editing planimetry drawings."""
-
 import os
 import sys
 from datetime import datetime
@@ -12,9 +10,15 @@ import streamlit.components.v1 as components
 
 from backend.sample_tasks import EXERCISES
 from frontend.drawing import export_drawing
-from frontend.highlight import highlight_condition
+from frontend.presentation import FIGURES, constraint_label
 
-st.set_page_config(page_title="Построитель чертежей", page_icon="📐", layout="wide")
+st.set_page_config(
+    page_title="Планиметрия · Построитель чертежей", page_icon="📐", layout="wide"
+)
+st.markdown(
+    f"<style>{Path(__file__).with_name('styles.css').read_text(encoding='utf-8')}</style>",
+    unsafe_allow_html=True,
+)
 API = os.getenv("GEOMETRY_API_URL", "http://127.0.0.1:8000").rstrip("/")
 canvas = components.declare_component(
     "geometry_canvas", path=str(Path(__file__).parent / "geometry_component")
@@ -26,22 +30,23 @@ def post(endpoint, payload):
     if not response.ok:
         detail = response.json().get("detail", "Ошибка запроса")
         raise ValueError(
-            detail if isinstance(detail, str) else "Некорректные данные. Проверьте условие задачи."
+            detail
+            if isinstance(detail, str)
+            else "Некорректные данные. Проверьте условие задачи."
         )
     return response.json()
 
 
-st.title("📐 Построитель чертежей для школьной планиметрии")
-st.caption("Локальная нейросеть распознаёт условие, геометрическое ядро проверяет построение.")
 with st.sidebar:
-    st.header("Готовые примеры")
-    preset = st.selectbox("Задача", list(EXERCISES))
-    if st.button("Загрузить пример"):
+    st.markdown("### 📐 Планиметрия")
+    st.divider()
+    st.markdown("#### Библиотека примеров")
+    preset = st.selectbox("Выберите задачу", list(EXERCISES))
+    if st.button("Загрузить пример", use_container_width=True):
         st.session_state["task_text"] = EXERCISES[preset]
-    st.info(
-        "Данные обрабатываются локально. Сложные и неоднозначные условия могут потребовать уточнения."
-    )
-    if st.button("Обновить историю"):
+    st.divider()
+    st.markdown("#### История построений")
+    if st.button("Обновить историю", use_container_width=True):
         try:
             response = requests.get(f"{API}/history", timeout=10)
             response.raise_for_status()
@@ -55,49 +60,66 @@ with st.sidebar:
             range(len(history)),
             format_func=lambda i: f"#{history[i]['id']} {history[i]['text'][:60]}",
         )
-        if st.button("Открыть построение"):
+        if st.button("Открыть построение", use_container_width=True):
             try:
-                response = requests.get(f"{API}/history/{history[selected]['id']}", timeout=10)
+                response = requests.get(
+                    f"{API}/history/{history[selected]['id']}", timeout=10
+                )
                 response.raise_for_status()
                 item = response.json()
-                st.session_state["solution"] = item["result"]
-                st.session_state["task_text"] = item["text"]
-                st.session_state["solution_text"] = item["text"]
-                st.session_state["drawing_version"] = st.session_state.get("drawing_version", 0) + 1
+                st.session_state.update(
+                    solution=item["result"],
+                    task_text=item["text"],
+                    solution_text=item["text"],
+                )
+                st.session_state["drawing_version"] = (
+                    st.session_state.get("drawing_version", 0) + 1
+                )
             except (requests.RequestException, ValueError):
                 st.error("Не удалось открыть чертёж")
-text = st.text_area("Условие задачи", key="task_text", height=140)
-if st.button("Сгенерировать чертёж", type="primary"):
-    if not text.strip():
-        st.warning("Поле ввода не может быть пустым")
-    else:
-        try:
-            with st.spinner("Распознаю условие и проверяю геометрию…"):
-                st.session_state["solution"] = post("solve", {"text": text})
-                st.session_state["solution_text"] = text
-            st.session_state["drawing_version"] = st.session_state.get("drawing_version", 0) + 1
-            st.success("Чертёж построен. Ограничения проверены численно.")
-        except (requests.RequestException, ValueError) as exc:
-            st.session_state.pop("solution", None)
-            st.error(f"Не удалось построить чертёж: {exc}")
+
+
+st.title("Построитель чертежей")
+with st.container(border=True):
+    st.subheader("Условие задачи")
+    text = st.text_area(
+        "Условие задачи",
+        key="task_text",
+        height=135,
+        max_chars=6000,
+        placeholder="Например: в треугольнике ABC AB = 5, AC = 6, BC = 7. AM — медиана.",
+        label_visibility="collapsed",
+    )
+    generate = st.button("Построить", type="primary")
+    st.caption("Текст отправляется внешнему API Apilsin.")
+    if generate:
+        if not text.strip():
+            st.warning("Поле ввода не может быть пустым")
+        else:
+            try:
+                with st.spinner("Распознаю условие и проверяю геометрию…"):
+                    st.session_state["solution"] = post("solve", {"text": text})
+                    st.session_state["solution_text"] = text
+                st.session_state["drawing_version"] = (
+                    st.session_state.get("drawing_version", 0) + 1
+                )
+            except (requests.RequestException, ValueError) as exc:
+                st.session_state.pop("solution", None)
+                st.error(f"Не удалось построить чертёж: {exc}")
+
 if "solution" in st.session_state:
     sol = st.session_state["solution"]
     source_text = st.session_state.get("solution_text", text)
     if text != source_text:
-        st.warning(
-            "Условие изменено. На экране прежний чертёж — нажмите «Сгенерировать чертёж» для обновления."
-        )
-    with st.expander("Распознанные обозначения и числа в условии"):
-        st.markdown(highlight_condition(source_text, sol["schema"]), unsafe_allow_html=True)
-        st.caption(
-            "Подсветка показывает совпадения обозначений и чисел, а не подтверждает полноту понимания текста."
-        )
+        st.warning("Условие изменено. Нажмите «Построить» для обновления чертежа.")
     for warning in sol.get("warnings", []):
         st.warning(warning)
-    left, right = st.columns([3, 1])
+    left, right = st.columns([2.4, 1], gap="large")
     with left:
         event = canvas(
-            solution=sol, key=f"drawing-{st.session_state.get('drawing_version', 0)}", default=None
+            solution=sol,
+            key=f"drawing-{st.session_state.get('drawing_version', 0)}",
+            default=None,
         )
         if event and event.get("id") != st.session_state.get("last_edit"):
             st.session_state["last_edit"] = event["id"]
@@ -118,27 +140,19 @@ if "solution" in st.session_state:
             except (requests.RequestException, ValueError) as exc:
                 st.warning(f"Перемещение отклонено; сохранён исходный чертёж. {exc}")
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        a, b = st.columns(2)
-        for col, fmt in [(a, "png"), (b, "svg")]:
+        for col, fmt in zip(st.columns(2), ["png", "svg"]):
             col.download_button(
                 f"Скачать {fmt.upper()}",
                 export_drawing(sol, fmt),
                 file_name=f"geometry_drawing_{stamp}.{fmt}",
                 mime="image/png" if fmt == "png" else "image/svg+xml",
+                use_container_width=True,
             )
-    with right:
-        st.subheader("Распознанные объекты")
-        st.write("Точки: " + ", ".join(sol["points"]))
-        for f in sol.get("figures", []):
-            st.write(f"{f['name']} — {f['type']}")
-        st.caption(sol.get("parser_engine", ""))
-        st.subheader("Параметры и отношения")
-        for c in sol["schema"].get("constraints", []):
-            label = f"{c['type']}: {c['args']}"
-            if c.get("value") is not None:
-                st.write(f"{label} = {c['value']}")
-            else:
-                st.success(label)
-        st.caption(
-            "Численная проверка ограничений не заменяет математическое доказательство. Нераспознанные детали могут отсутствовать: сверьте список с условием."
-        )
+    with right, st.container(border=True):
+        st.subheader("Объекты и связи")
+        st.write("**Точки:** " + ", ".join(sol["points"]))
+        for figure in sol.get("figures", []):
+            st.write(f"{FIGURES.get(figure['type'], figure['type'])} {figure['name']}")
+        st.divider()
+        for constraint in sol["schema"].get("constraints", []):
+            st.write(constraint_label(constraint))

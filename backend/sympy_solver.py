@@ -28,7 +28,9 @@ class SympyGeometrySolver:
         self.schema = schema
         self.names = list(schema.points)
         if not self.names:
-            raise GeometryError("Не удалось распознать геометрические фигуры на чертеже")
+            raise GeometryError(
+                "Не удалось распознать геометрические фигуры на чертеже"
+            )
         self.index = {p: i for i, p in enumerate(self.names)}
         self.constraints = list(schema.constraints)
         self._expand_figures()
@@ -56,7 +58,14 @@ class SympyGeometrySolver:
                 if "triangle" in t
                 else 4
                 if t
-                in {"quadrilateral", "parallelogram", "rectangle", "square", "rhombus", "trapezoid"}
+                in {
+                    "quadrilateral",
+                    "parallelogram",
+                    "rectangle",
+                    "square",
+                    "rhombus",
+                    "trapezoid",
+                }
                 else None
             )
             if expected and len(p) != expected:
@@ -70,7 +79,9 @@ class SympyGeometrySolver:
                 self._add("right_angle", [p[0], p[1], p[2]])
             if t in {"square", "rhombus"}:
                 self._add("equal_segments", [p[:2], p[1:3]])
-            if t == "trapezoid" and not any(c.type == "parallel" for c in self.constraints):
+            if t == "trapezoid" and not any(
+                c.type == "parallel" for c in self.constraints
+            ):
                 self._add("parallel", [p[:2], p[2:]])
             if t == "equilateral_triangle":
                 self._add("equal_segments", [p[:2], p[1:3]])
@@ -78,7 +89,8 @@ class SympyGeometrySolver:
             if t == "isosceles_triangle":
                 self._add("equal_segments", [[p[0], p[2]], [p[1], p[2]]])
             if t == "right_triangle" and not any(
-                c.type == "right_angle" and set(c.args) == set(p) for c in self.constraints
+                c.type == "right_angle" and set(c.args) == set(p)
+                for c in self.constraints
             ):
                 # Documented convention: the last vertex is the right-angle vertex.
                 self._add("right_angle", [p[0], p[2], p[1]])
@@ -129,7 +141,10 @@ class SympyGeometrySolver:
         for c in self.constraints:
             if c.type == "circumscribed_circle" and c.args[0] == center:
                 return self._norm(p[c.args[1]] - p[center])
-            if c.type in ("inscribed_circle", "inscribed_polygon") and c.args[0] == center:
+            if (
+                c.type in ("inscribed_circle", "inscribed_polygon")
+                and c.args[0] == center
+            ):
                 a, b = p[c.args[1]], p[c.args[2]]
                 return abs(self._cross(b - a, p[center] - a)) / self._norm(b - a)
         raise GeometryError(f"Для окружности {center} задайте радиус или точку на ней")
@@ -163,7 +178,11 @@ class SympyGeometrySolver:
         if t in {"parallel", "perpendicular"}:
             u, w = vec(a[0]), vec(a[1])
             denom = self._norm(u) * self._norm(w)
-            return [self._cross(u, w) / denom if t == "parallel" else float(np.dot(u, w)) / denom]
+            return [
+                self._cross(u, w) / denom
+                if t == "parallel"
+                else float(np.dot(u, w)) / denom
+            ]
         if t == "midpoint":
             return list((p[a[0]] - (p[a[1]] + p[a[2]]) / 2) / s)
         if t in {"point_on_segment", "point_on_line", "point_between", "collinear"}:
@@ -173,7 +192,9 @@ class SympyGeometrySolver:
             if t in {"point_on_segment", "point_between"}:
                 fraction = float(np.dot(q - start, u)) / max(float(np.dot(u, u)), 1e-15)
                 margin = 0.001 if t == "point_between" else 0
-                result.extend([max(0, margin - fraction), max(0, fraction - 1 + margin)])
+                result.extend(
+                    [max(0, margin - fraction), max(0, fraction - 1 + margin)]
+                )
             return result
         if t == "projection":
             h, q, start, end = (p[n] for n in a)
@@ -188,7 +209,9 @@ class SympyGeometrySolver:
             # Four segments: ab*cd=ef*gh, or ab/cd=ef/gh.
             x, y, z, w = [length(pair) for pair in a]
             return (
-                [(x * y - z * w) / (s * s)] if t == "product_equal" else [(x * w - z * y) / (s * s)]
+                [(x * y - z * w) / (s * s)]
+                if t == "product_equal"
+                else [(x * w - z * y) / (s * s)]
             )
         if t == "inside_triangle":
             q, x, y, z = (p[n] for n in a)
@@ -224,7 +247,7 @@ class SympyGeometrySolver:
             direction = u / self._norm(u) - w / self._norm(w)
             return [self._cross(direction, ray) / (self._norm(direction) * s)]
         if t == "bisector":
-            # Canonical convention shared with rule parser: [vertex, foot, sideA, sideB].
+            # Schema argument order: [vertex, foot, sideA, sideB].
             vertex, foot, left, right = (p[n] for n in a)
             u, w, ray = left - vertex, right - vertex, foot - vertex
             direction = u / self._norm(u) + w / self._norm(w)
@@ -255,24 +278,38 @@ class SympyGeometrySolver:
         if t == "point_on_circle":
             return [(self._norm(p[a[0]] - p[a[1]]) - self._circle_radius(p, a[1])) / s]
         if t == "perimeter":
-            return [(sum(length([a[i], a[(i + 1) % len(a)]]) for i in range(len(a))) - v) / s]
+            return [
+                (sum(length([a[i], a[(i + 1) % len(a)]]) for i in range(len(a))) - v)
+                / s
+            ]
         if t == "circle_radius":
             center = a[0]
             circles = [c for c in self.schema.circles if c.center == center]
             if not circles:
-                raise GeometryError("Для circle_radius требуется окружность с этим центром")
+                raise GeometryError(
+                    "Для circle_radius требуется окружность с этим центром"
+                )
             circle = circles[0]
             residuals = []
             if circle.radius is not None:
                 residuals.append((circle.radius - v) / s)
-            residuals.extend((self._norm(p[n] - p[center]) - v) / s for n in circle.passing_through)
+            residuals.extend(
+                (self._norm(p[n] - p[center]) - v) / s for n in circle.passing_through
+            )
             for c in self.constraints:
-                if c.type in ("inscribed_circle", "inscribed_polygon") and c.args[0] == center:
+                if (
+                    c.type in ("inscribed_circle", "inscribed_polygon")
+                    and c.args[0] == center
+                ):
                     x, y = c.args[1:3]
-                    r = abs(self._cross(p[y] - p[x], p[center] - p[x])) / self._norm(p[y] - p[x])
+                    r = abs(self._cross(p[y] - p[x], p[center] - p[x])) / self._norm(
+                        p[y] - p[x]
+                    )
                     residuals.append((r - v) / s)
                 if c.type == "circumscribed_circle" and c.args[0] == center:
-                    residuals.extend((self._norm(p[n] - p[center]) - v) / s for n in c.args[1:])
+                    residuals.extend(
+                        (self._norm(p[n] - p[center]) - v) / s for n in c.args[1:]
+                    )
             if not residuals:
                 raise GeometryError("Радиус не связан с геометрией окружности")
             return residuals
@@ -311,7 +348,12 @@ class SympyGeometrySolver:
                 "obtuse_angle",
             }:
                 segments.extend([[c.args[0], c.args[1]], [c.args[1], c.args[2]]])
-            if c.type in {"point_on_segment", "point_on_line", "point_between", "collinear"}:
+            if c.type in {
+                "point_on_segment",
+                "point_on_line",
+                "point_between",
+                "collinear",
+            }:
                 segments.append(c.args[1:3])
             if c.type == "projection":
                 segments.append(c.args[2:4])
@@ -328,7 +370,9 @@ class SympyGeometrySolver:
             # Unknown-size circles still need a positive, drawable radius.
             # No explicit radius does not mean the geometry is contradictory.
         for circle in self.schema.circles:
-            out.append(max(0, 0.01 - self._circle_radius(p, circle.center) / self.scale))
+            out.append(
+                max(0, 0.01 - self._circle_radius(p, circle.center) / self.scale)
+            )
         return out
 
     def validate_points(self, points):
@@ -337,7 +381,11 @@ class SympyGeometrySolver:
         p = {}
         for name, value in points.items():
             arr = np.asarray(value, dtype=float)
-            if arr.shape != (2,) or not np.isfinite(arr).all() or np.max(np.abs(arr)) > 1e6:
+            if (
+                arr.shape != (2,)
+                or not np.isfinite(arr).all()
+                or np.max(np.abs(arr)) > 1e6
+            ):
                 raise GeometryError(
                     "Координаты должны быть конечными парами чисел в пределах ±1000000"
                 )
@@ -357,8 +405,12 @@ class SympyGeometrySolver:
         p = {
             n: np.array(
                 [
-                    self.scale * 0.7 * math.cos(i * 2 * math.pi / max(3, len(self.names))),
-                    self.scale * 0.7 * math.sin(i * 2 * math.pi / max(3, len(self.names))),
+                    self.scale
+                    * 0.7
+                    * math.cos(i * 2 * math.pi / max(3, len(self.names))),
+                    self.scale
+                    * 0.7
+                    * math.sin(i * 2 * math.pi / max(3, len(self.names))),
                 ]
             )
             for i, n in enumerate(self.names)
@@ -367,7 +419,9 @@ class SympyGeometrySolver:
             if len(f.points) >= 3:
                 for i, n in enumerate(f.points):
                     angle = i * 2 * math.pi / len(f.points)
-                    p[n] = self.scale * np.array([math.cos(angle), math.sin(angle)]) * 0.6
+                    p[n] = (
+                        self.scale * np.array([math.cos(angle), math.sin(angle)]) * 0.6
+                    )
         for c in self.constraints:
             if c.type == "midpoint":
                 m, a, b = c.args
@@ -378,7 +432,9 @@ class SympyGeometrySolver:
                 p[m] = (p[a] + p[b]) / 2
         return p
 
-    def solve(self, initial_points=None, fixed_points=None, timeout=12.0) -> dict[str, Any]:
+    def solve(
+        self, initial_points=None, fixed_points=None, timeout=12.0
+    ) -> dict[str, Any]:
         started = time.monotonic()
         base = (
             self._initial_positions()
@@ -392,7 +448,9 @@ class SympyGeometrySolver:
         anchor = not fixed and initial_points is None
 
         def unpack(x):
-            return {n: x[2 * i : 2 * i + 2] * self.scale for i, n in enumerate(self.names)}
+            return {
+                n: x[2 * i : 2 * i + 2] * self.scale for i, n in enumerate(self.names)
+            }
 
         def fun(x):
             if time.monotonic() - started > timeout:
@@ -409,13 +467,15 @@ class SympyGeometrySolver:
             # Keep genuinely free drawings at a useful scale, not a collapsed zero solution.
             if (
                 not any(
-                    c.type in {"distance", "perimeter", "circle_radius"} for c in self.constraints
+                    c.type in {"distance", "perimeter", "circle_radius"}
+                    for c in self.constraints
                 )
                 and not any(c.radius is not None for c in self.schema.circles)
                 and len(self.names) > 1
             ):
                 out.append(
-                    (self._norm(p[self.names[1]] - p[self.names[0]]) - self.scale) / self.scale
+                    (self._norm(p[self.names[1]] - p[self.names[0]]) - self.scale)
+                    / self.scale
                 )
             return np.asarray(out or [0.0])
 
@@ -430,13 +490,19 @@ class SympyGeometrySolver:
                 else seed + np.random.default_rng(attempt).normal(0, 0.5, seed.shape)
             )
             try:
-                result = least_squares(fun, start, max_nfev=600, ftol=1e-11, xtol=1e-11, gtol=1e-11)
+                result = least_squares(
+                    fun, start, max_nfev=600, ftol=1e-11, xtol=1e-11, gtol=1e-11
+                )
             except TimeoutError:
                 break
             coords = {n: list(map(float, v)) for n, v in unpack(result.x).items()}
             error, residuals = self.validate_points(coords)
             pin_error = max(
-                [self._norm(np.array(coords[n]) - v) / self.scale for n, v in fixed.items()] + [0]
+                [
+                    self._norm(np.array(coords[n]) - v) / self.scale
+                    for n, v in fixed.items()
+                ]
+                + [0]
             )
             error = max(error, pin_error)
             if error < best_error:

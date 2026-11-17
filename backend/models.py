@@ -71,7 +71,8 @@ class Constraint(BaseModel):
         description="Point names or segment pairs, e.g. ['A', 'B'] or [['A', 'B'], ['C', 'D']]"
     )
     value: float | list[float] | None = Field(
-        default=None, description="Numeric value, e.g. length, angle in degrees, or ratio [x, y]"
+        default=None,
+        description="Numeric value, e.g. length, angle in degrees, or ratio [x, y]",
     )
 
     @model_validator(mode="after")
@@ -107,7 +108,9 @@ class Constraint(BaseModel):
             "distinct": 2,
         }
         kind = self.type.value
-        if kind in arities and (len(self.args) != arities[kind] or not names(self.args)):
+        if kind in arities and (
+            len(self.args) != arities[kind] or not names(self.args)
+        ):
             raise ValueError(f"Некорректные аргументы {kind}")
         if kind in {"product_equal", "ratio_equal"}:
             if len(self.args) != 4 or not all(
@@ -130,16 +133,21 @@ class Constraint(BaseModel):
         } and len(set(self.args)) != len(self.args):
             raise ValueError(f"{kind}: точки должны различаться")
         if kind == "inscribed_polygon" and (
-            not names(self.args) or len(self.args) < 4 or len(set(self.args)) != len(self.args)
+            not names(self.args)
+            or len(self.args) < 4
+            or len(set(self.args)) != len(self.args)
         ):
             raise ValueError("Некорректные вершины вписанного в многоугольник круга")
         if kind in {"circumscribed_circle", "perimeter"} and (
-            not names(self.args) or len(self.args) < (4 if kind == "circumscribed_circle" else 3)
+            not names(self.args)
+            or len(self.args) < (4 if kind == "circumscribed_circle" else 3)
         ):
             raise ValueError(f"Некорректные вершины {kind}")
         if kind in {"sin", "cos", "tg"}:
             if not isinstance(self.value, (int, float)):
-                raise ValueError("Требуется числовое значение тригонометрической функции")
+                raise ValueError(
+                    "Требуется числовое значение тригонометрической функции"
+                )
             if kind == "sin" and not 0 < self.value <= 1:
                 raise ValueError("Синус внутреннего угла должен быть в (0, 1]")
             if kind == "cos" and not -1 < self.value < 1:
@@ -172,7 +180,9 @@ class Constraint(BaseModel):
         ):
             raise ValueError("Требуется положительное значение суммы/разности отрезков")
         if kind == "ratio" and (
-            not isinstance(self.value, list) or len(self.value) != 2 or min(self.value) <= 0
+            not isinstance(self.value, list)
+            or len(self.value) != 2
+            or min(self.value) <= 0
         ):
             raise ValueError("Отношение должно содержать два положительных числа")
         return self
@@ -189,7 +199,9 @@ class Figure(BaseModel):
 class Circle(BaseModel):
     name: str = Field(default="omega")
     center: str = Field(description="Point name of the center")
-    radius: float | None = Field(default=None, description="Numerical radius if specified")
+    radius: float | None = Field(
+        default=None, description="Numerical radius if specified"
+    )
     passing_through: list[str] = Field(
         default_factory=list, description="Points lying on the circle"
     )
@@ -202,16 +214,25 @@ class GeometrySchema(BaseModel):
     """
 
     points: list[str] = Field(
-        default_factory=list, description="Unique names of points (single uppercase letters)"
+        default_factory=list,
+        description="Unique names of points (single uppercase letters)",
     )
     lines: list[list[str]] = Field(
         default_factory=list, description="Segments to draw, each is [Point1, Point2]"
     )
-    figures: list[Figure] = Field(default_factory=list, description="Identified geometric figures")
-    circles: list[Circle] = Field(default_factory=list, description="Circles in the problem")
-    constraints: list[Constraint] = Field(default_factory=list, description="Geometric constraints")
+    figures: list[Figure] = Field(
+        default_factory=list, description="Identified geometric figures"
+    )
+    circles: list[Circle] = Field(
+        default_factory=list, description="Circles in the problem"
+    )
+    constraints: list[Constraint] = Field(
+        default_factory=list, description="Geometric constraints"
+    )
     givens: list[dict] = Field(default_factory=list, description="Raw givens/facts")
-    targets: list[dict] = Field(default_factory=list, description="Quantities to find or prove")
+    targets: list[dict] = Field(
+        default_factory=list, description="Quantities to find or prove"
+    )
 
     @model_validator(mode="after")
     def validate_references(self):
@@ -226,7 +247,9 @@ class GeometrySchema(BaseModel):
             if len(line) != 2 or len(set(line)) != 2 or not set(line) <= known:
                 raise ValueError("Некорректный отрезок или неизвестная точка")
         for figure in self.figures:
-            if not set(figure.points) <= known or len(set(figure.points)) != len(figure.points):
+            if not set(figure.points) <= known or len(set(figure.points)) != len(
+                figure.points
+            ):
                 raise ValueError("Некорректные вершины фигуры")
         for circle in self.circles:
             if circle.center not in known or not set(circle.passing_through) <= known:

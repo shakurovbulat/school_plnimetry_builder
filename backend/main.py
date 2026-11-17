@@ -7,9 +7,9 @@ from functools import lru_cache
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from backend.llm_parser import get_llm_json_schema, parse_hybrid
+from backend.llm_parser import get_llm_json_schema, parse_task, provider_status
 from backend.models import GeometrySchema
 from backend.sympy_solver import SympyGeometrySolver
 
@@ -31,11 +31,13 @@ app.add_middleware(
 
 
 class TaskRequest(BaseModel):
-    text: str = Field(min_length=1, max_length=6000, description="Planimetry problem formulation")
+    model_config = ConfigDict(extra="forbid")
+    text: str = Field(
+        min_length=1, max_length=6000, description="Planimetry problem formulation"
+    )
     custom_schema: GeometrySchema | None = Field(
         default=None, description="Optional pre-modified or direct GeometrySchema"
     )
-    parser_mode: str | None = Field(default=None, pattern="^(ollama|rules)$")
     model: str | None = Field(default=None, description="Custom LLM Model Name")
 
     @field_validator("text")
@@ -61,14 +63,12 @@ class PointUpdateRequest(DrawingRequest):
 
 @app.get("/health")
 def health() -> dict[str, str]:
-    return {"status": "ok", "engine": "SymPy + Pydantic + LLM/Heuristic"}
+    return {"status": "ok", "engine": "Apilsin -> Pydantic -> SymPy"}
 
 
-@app.get("/ollama")
-def local_model_status():
-    from backend.llm_parser import ollama_status
-
-    return ollama_status()
+@app.get("/provider")
+def model_status():
+    return provider_status()
 
 
 @app.get("/schema")
@@ -80,18 +80,15 @@ def schema_spec() -> dict:
 @app.post("/parse")
 def parse_geometry_task(request: TaskRequest) -> dict:
     try:
-        schema, parser_engine = parse_hybrid(
-            request.text,
-            mode=request.parser_mode,
-            model=request.model,
-        )
+        schema, parser_engine, warnings = parse_task(request.text, model=request.model)
         return {
             "status": "success",
             "schema": schema.model_dump(),
             "parser_engine": parser_engine,
+            "warnings": warnings,
         }
     except Exception as exc:
-        logger.exception("Parse error")
+        logger.warning("Parse error (%s)", type(exc).__name__)
         raise HTTPException(
             status_code=503 if isinstance(exc, RuntimeError) else 422, detail=str(exc)
         ) from exc
@@ -100,22 +97,23 @@ def parse_geometry_task(request: TaskRequest) -> dict:
 @app.post("/solve")
 def solve_geometry_task(request: TaskRequest) -> dict:
     parser_engine = "Custom Schema"
+    warnings = []
     started = time.perf_counter()
     try:
         if request.custom_schema is not None:
             schema = request.custom_schema
         else:
-            schema, parser_engine = parse_hybrid(
-                request.text,
-                mode=request.parser_mode,
-                model=request.model,
+            schema, parser_engine, warnings = parse_task(
+                request.text, model=request.model
             )
 
         parsed_at = time.perf_counter()
         solver = SympyGeometrySolver(schema)
         solution = solver.solve()
         solution["diagnostics"]["parse_seconds"] = round(parsed_at - started, 3)
-        solution["diagnostics"]["total_seconds"] = round(time.perf_counter() - started, 3)
+        solution["diagnostics"]["total_seconds"] = round(
+            time.perf_counter() - started, 3
+        )
 
         result = {
             "status": "success",
@@ -126,26 +124,8 @@ def solve_geometry_task(request: TaskRequest) -> dict:
             "circles": solution["circles"],
             "figures": solution["figures"],
             "diagnostics": solution["diagnostics"],
+            "warnings": warnings,
         }
-        if any(
-            c.type
-            in (
-                "distinct",
-                "product_equal",
-                "ratio_equal",
-                "acute_angle",
-                "inside_triangle",
-                "external_tangency",
-                "tangent",
-            )
-            for c in schema.constraints
-        ):
-            result["warnings"] = [
-                "Построен один допустимый экземпляр исходных данных, не доказательство утверждения. "
-                "При свободных параметрах другие экземпляры могут выглядеть иначе. "
-                "Если прямая имеет два пересечения с окружностью, выбор ветви не считается единственным; "
-                "дополнительная ветвь при наличии обозначена индексом 1."
-            ]
         try:
             result["history_id"] = history_store().save(request.text, result)
         except Exception:
@@ -155,7 +135,7 @@ def solve_geometry_task(request: TaskRequest) -> dict:
             )
         return result
     except Exception as exc:
-        logger.exception("Solve error: %s", exc)
+        logger.warning("Solve error (%s)", type(exc).__name__)
         raise HTTPException(
             status_code=503 if isinstance(exc, RuntimeError) else 422, detail=str(exc)
         ) from exc
@@ -176,9 +156,14 @@ def update_point(request: PointUpdateRequest):
             raise ValueError("Некорректные координаты")
         # Only the dragged vertex is pinned; dependent geometry is recomputed.
         result = solver.solve(
-            initial_points=request.points, fixed_points={request.point_name: request.new_coords}
+            initial_points=request.points,
+            fixed_points={request.point_name: request.new_coords},
         )
-        return {"status": "success", "schema": request.schema_data.model_dump(), **result}
+        return {
+            "status": "success",
+            "schema": request.schema_data.model_dump(),
+            **result,
+        }
     except ValueError as exc:
         raise HTTPException(422, detail=str(exc)) from exc
 
@@ -231,7 +216,9 @@ def export_points(fmt: str, request: DrawingRequest):
             "schema": request.schema_data.model_dump(),
         }
         data = export_drawing(solution, fmt)
-        return Response(data, media_type="image/png" if fmt == "png" else "image/svg+xml")
+        return Response(
+            data, media_type="image/png" if fmt == "png" else "image/svg+xml"
+        )
     except ValueError as exc:
         raise HTTPException(422, detail=str(exc)) from exc
 

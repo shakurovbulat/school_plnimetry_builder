@@ -40,8 +40,12 @@ class History:
 
     def list(self, limit=30):
         with Session(self.engine) as session:
-            rows = session.scalars(select(Drawing).order_by(Drawing.id.desc()).limit(limit))
-            return [{"id": r.id, "created_at": r.created_at, "text": r.text} for r in rows]
+            rows = session.scalars(
+                select(Drawing).order_by(Drawing.id.desc()).limit(limit)
+            )
+            return [
+                {"id": r.id, "created_at": r.created_at, "text": r.text} for r in rows
+            ]
 
     def get(self, item_id):
         with Session(self.engine) as session:
