@@ -10,7 +10,12 @@ from fastapi.responses import Response
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from backend.editing import delete_point_schema
-from backend.llm_parser import get_llm_json_schema, parse_task, provider_status
+from backend.llm_parser import (
+    ProviderError,
+    get_llm_json_schema,
+    parse_task,
+    provider_status,
+)
 from backend.models import GeometrySchema
 from backend.sympy_solver import SympyGeometrySolver
 
@@ -67,7 +72,7 @@ class PointUpdateRequest(PointDeleteRequest):
 
 @app.get("/health")
 def health() -> dict[str, str]:
-    return {"status": "ok", "engine": "Apilsin -> Pydantic -> SymPy"}
+    return {"status": "ok", "engine": "External LLM -> Pydantic -> SymPy"}
 
 
 @app.get("/provider")
@@ -91,11 +96,11 @@ def parse_geometry_task(request: TaskRequest) -> dict:
             "parser_engine": parser_engine,
             "warnings": warnings,
         }
-    except Exception as exc:
+    except ProviderError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+    except ValueError as exc:
         logger.warning("Parse error (%s)", type(exc).__name__)
-        raise HTTPException(
-            status_code=503 if isinstance(exc, RuntimeError) else 422, detail=str(exc)
-        ) from exc
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @app.post("/solve")
@@ -138,11 +143,11 @@ def solve_geometry_task(request: TaskRequest) -> dict:
                 "Не удалось сохранить историю; чертёж доступен для экспорта."
             )
         return result
-    except Exception as exc:
+    except ProviderError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+    except ValueError as exc:
         logger.warning("Solve error (%s)", type(exc).__name__)
-        raise HTTPException(
-            status_code=503 if isinstance(exc, RuntimeError) else 422, detail=str(exc)
-        ) from exc
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @app.post("/update-point")

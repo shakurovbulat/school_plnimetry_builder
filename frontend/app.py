@@ -28,14 +28,21 @@ canvas = components.declare_component(
 
 
 def post(endpoint, payload):
-    response = requests.post(f"{API}/{endpoint}", json=payload, timeout=240)
+    try:
+        response = requests.post(f"{API}/{endpoint}", json=payload, timeout=240)
+    except requests.Timeout:
+        raise ValueError("Интерфейс не дождался ответа сервера построения.") from None
     if not response.ok:
-        detail = response.json().get("detail", "Ошибка запроса")
-        raise ValueError(
-            detail
-            if isinstance(detail, str)
-            else "Некорректные данные. Проверьте условие задачи."
-        )
+        try:
+            body = response.json()
+        except ValueError:
+            body = None
+        detail = body.get("detail") if isinstance(body, dict) else None
+        if isinstance(detail, str) and detail:
+            raise ValueError(detail)
+        if response.status_code == 422:
+            raise ValueError("Некорректные данные. Проверьте условие задачи.")
+        raise ValueError(f"Сервер построения вернул HTTP {response.status_code}.")
     return response.json()
 
 
@@ -93,7 +100,7 @@ with st.container(border=True):
         label_visibility="collapsed",
     )
     generate = st.button("Построить", type="primary")
-    st.caption("Текст отправляется внешнему API Apilsin.")
+    st.caption("Текст отправляется внешней языковой модели через API.")
     if generate:
         if not text.strip():
             st.warning("Поле ввода не может быть пустым")
